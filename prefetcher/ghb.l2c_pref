@@ -1,0 +1,94 @@
+#include "cache.h"
+#include <cmath>
+
+#define PREFETCH_DEGREE 4
+#define LOOK_AHEAD 4
+#define IT_SIZE 256
+#define GHB_SIZE 256
+
+struct GHB_entry {
+    uint64_t addr; //global miss address
+    int prev_ptr; //"link" pointer, idx of prev link
+};
+
+int IndexTable[IT_SIZE]; //hashes PC of a load instr to a GHB index
+GHB_entry ghb[GHB_SIZE]; //array for circular fifo queue, need to do do mod indexing
+int ghb_head = 0; 
+
+void CACHE::l2c_prefetcher_initialize() 
+{
+    cout << "CPU " << cpu << " L2C GHB Stride prefetcher" << endl;
+
+    //init table entries
+    for(int i = 0; i < IT_SIZE; i++) {
+        IndexTable[i] = -1; 
+    }
+
+    //init ghb
+    for(int i = 0; i < GHB_SIZE; i++) {
+        ghb[i] = GHB_entry{0, -1}; 
+    }
+    ghb_head = 0;
+}
+
+//IT: maps IP to IT_index, at the IT_index, it contains a ghb index
+//GHB: Contains miss address, and prev GHB index with same IT_index
+
+uint32_t CACHE::l2c_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint32_t metadata_in)
+{
+    int IT_index = ip % IT_SIZE;
+    
+    //-1 means our IT table entry is initalized but never been used before. Insert addr into GHB and move on
+    if (IndexTable[IT_index] == -1) {
+
+        IndexTable[IT_index] = ghb_head;
+        ghb[ghb_head].addr = addr;
+        ghb[ghb_head].prev_ptr = IndexTable[IT_index];
+
+        ghb_head = (ghb_head + 1) % GHB_SIZE;
+
+        return metadata_in;
+    }
+
+
+    //insert addr into GHB and then calculate past 2 strides
+    ghb[ghb_head].addr = addr;
+    ghb[ghb_head].prev_ptr = IndexTable[IT_index];
+    IndexTable[IT_index] = ghb_head;
+
+    int stride1, stride2;
+    int past_3_addr[3];
+
+    //traverse back 3 addresses (including current one)
+    int curr = ghb_head;
+    for (int i = 0; i < 3; i++){
+        past_3_addr[i] = ghb[curr].addr;
+        curr = ghb[curr].prev_ptr;
+    }
+
+    //calculate strides
+    stride1 = std::abs(past_3_addr[2] - past_3_addr[1]);
+    stride2 = std::abs(past_3_addr[1] - past_3_addr[0]);
+    //cout << "STRIDE 1 =  " << stride1 << "   STRIDE 2 = " << stride2 << endl;
+
+    //handle prefetches
+    if (stride1 == stride2){
+        for (int i = 0; i <= PREFETCH_DEGREE ; i++ ) {
+            uint64_t pf_address = addr + (LOOK_AHEAD + i ) * stride2;
+            prefetch_line(ip, addr, pf_address, FILL_L2, 0);
+        }
+    }
+
+    ghb_head = (ghb_head + 1) % GHB_SIZE;
+    return metadata_in;
+}
+
+uint32_t CACHE::l2c_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+  return metadata_in;
+}
+
+void CACHE::l2c_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " L2C GHB stride prefetcher final stats" << endl;
+}
