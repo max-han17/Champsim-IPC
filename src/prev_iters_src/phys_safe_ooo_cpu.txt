@@ -212,11 +212,15 @@ void O3_CPU::handle_branch()
 
                 arch_instr.asid[0] = cpu;
                 arch_instr.asid[1] = cpu;
+                
+                // Set instruction physical address directly from pre-translated trace
+                arch_instr.instruction_pa = current_instr.ip;
 
                 for (uint32_t i=0; i<MAX_INSTR_DESTINATIONS; i++) {
                     arch_instr.destination_registers[i] = current_instr.destination_registers[i];
                     arch_instr.destination_memory[i] = current_instr.destination_memory[i];
                     arch_instr.destination_virtual_address[i] = current_instr.destination_memory[i];
+                    // Physical addresses are already translated in the trace data
 
                     if (arch_instr.destination_registers[i])
                         num_reg_ops++;
@@ -244,6 +248,7 @@ void O3_CPU::handle_branch()
                     arch_instr.source_registers[i] = current_instr.source_registers[i];
                     arch_instr.source_memory[i] = current_instr.source_memory[i];
                     arch_instr.source_virtual_address[i] = current_instr.source_memory[i];
+                    // Source memory addresses are already translated to physical
 
                     if (arch_instr.source_registers[i])
                         num_reg_ops++;
@@ -413,70 +418,35 @@ void O3_CPU::fetch_instruction()
       fetch_resume_cycle = 0;
     }
   
-    // add this request to ITLB
-    uint32_t read_index = (ROB.last_read == (ROB.SIZE-1)) ? 0 : (ROB.last_read + 1);
-    for (uint32_t i=0; i<FETCH_WIDTH; i++) {
+        // Skip ITLB translation since we already have physical addresses
+        // Mark instructions as translated and go directly to L1I
+        uint32_t read_index = (ROB.last_read == (ROB.SIZE-1)) ? 0 : (ROB.last_read + 1);
+        for (uint32_t i=0; i<FETCH_WIDTH; i++) {
 
-        if (ROB.entry[read_index].ip == 0)
-            break;
+            if (ROB.entry[read_index].ip == 0)
+                break;
 
 #ifdef SANITY_CHECK
-        // sanity check
-        if (ROB.entry[read_index].translated) {
-            if (read_index == ROB.head)
-                break;
-            else {
-                cout << "read_index: " << read_index << " ROB.head: " << ROB.head << " ROB.tail: " << ROB.tail << endl;
-                assert(0);
+            // sanity check
+            if (ROB.entry[read_index].translated) {
+                if (read_index == ROB.head)
+                    break;
+                else {
+                    cout << "read_index: " << read_index << " ROB.head: " << ROB.head << " ROB.tail: " << ROB.tail << endl;
+                    assert(0);
+                }
             }
-        }
 #endif
 
-        PACKET trace_packet;
-        trace_packet.instruction = 1;
-        trace_packet.tlb_access = 1;
-        trace_packet.fill_level = FILL_L1;
-        trace_packet.cpu = cpu;
-        trace_packet.address = ROB.entry[read_index].ip >> LOG2_PAGE_SIZE;
-        if (knob_cloudsuite)
-            trace_packet.address = ((ROB.entry[read_index].ip >> LOG2_PAGE_SIZE) << 9) | ( 256 + ROB.entry[read_index].asid[0]);
-        else
-            trace_packet.address = ROB.entry[read_index].ip >> LOG2_PAGE_SIZE;
-        trace_packet.full_addr = ROB.entry[read_index].ip;
-        trace_packet.instr_id = ROB.entry[read_index].instr_id;
-        trace_packet.rob_index = read_index;
-        trace_packet.producer = 0; // TODO: check if this guy gets used or not
-        trace_packet.ip = ROB.entry[read_index].ip;
-        trace_packet.type = LOAD; 
-        trace_packet.asid[0] = ROB.entry[read_index].asid[0];
-        trace_packet.asid[1] = ROB.entry[read_index].asid[1];
-        trace_packet.event_cycle = current_core_cycle[cpu];
-
-        trace_packet.ipc_tag = ROB.entry[read_index].ipc_tag; //NEW
-
-
-        int rq_index = ITLB.add_rq(&trace_packet);
-
-        if (rq_index == -2)
-            break;
-        else {
-            /*
-            if (rq_index >= 0) {
-                uint32_t producer = ITLB.RQ.entry[rq_index].rob_index;
-                ROB.entry[read_index].fetch_producer = producer;
-                ROB.entry[read_index].is_consumer = 1;
-
-                ROB.entry[producer].memory_instrs_depend_on_me[read_index] = 1;
-                ROB.entry[producer].is_producer = 1; // producer for fetch
-            }
-            */
+            // Mark as translated since we already have physical addresses
+            ROB.entry[read_index].translated = COMPLETED;
+            ROB.entry[read_index].instruction_pa = ROB.entry[read_index].ip; // Already physical
 
             ROB.last_read = read_index;
             read_index++;
             if (read_index == ROB.SIZE)
                 read_index = 0;
         }
-    }
     
     uint32_t fetch_index = (ROB.last_fetch == (ROB.SIZE-1)) ? 0 : (ROB.last_fetch + 1);
 
@@ -928,7 +898,6 @@ void O3_CPU::add_load_queue(uint32_t rob_index, uint32_t data_index)
     LQ.entry[lq_index].rob_index = rob_index;
     LQ.entry[lq_index].asid[0] = ROB.entry[rob_index].asid[0];
     LQ.entry[lq_index].asid[1] = ROB.entry[rob_index].asid[1];
-    LQ.entry[lq_index].ipc_tag = ROB.entry[rob_index].ipc_tag;
     LQ.entry[lq_index].event_cycle = current_core_cycle[cpu] + SCHEDULING_LATENCY;
     
     // If we have physical addresses directly (non-zero), set them and mark as translated
@@ -1008,10 +977,12 @@ void O3_CPU::add_load_queue(uint32_t rob_index, uint32_t data_index)
 
                 // do not forward data from the store queue since this is WAR
                 // just read correct data from data cache
-
-                LQ.entry[lq_index].physical_address = 0;
-                LQ.entry[lq_index].translated = 0;
-                LQ.entry[lq_index].fetched = 0;
+                // Only reset if we have a valid virtual address to fall back to
+                if (LQ.entry[lq_index].virtual_address != 0) {
+                    LQ.entry[lq_index].physical_address = 0;
+                    LQ.entry[lq_index].translated = 0;
+                    LQ.entry[lq_index].fetched = 0;
+                }
                 
                 DP(if(warmup_complete[cpu]) {
                 cout << "[LQ] " << __func__ << " instr_id: " << LQ.entry[lq_index].instr_id << " reset fetched: " << +LQ.entry[lq_index].fetched;
@@ -1125,7 +1096,6 @@ void O3_CPU::add_store_queue(uint32_t rob_index, uint32_t data_index)
     SQ.entry[sq_index].rob_index = rob_index;
     SQ.entry[sq_index].asid[0] = ROB.entry[rob_index].asid[0];
     SQ.entry[sq_index].asid[1] = ROB.entry[rob_index].asid[1];
-    SQ.entry[sq_index].ipc_tag = ROB.entry[rob_index].ipc_tag;
     SQ.entry[sq_index].event_cycle = current_core_cycle[cpu] + SCHEDULING_LATENCY;
     
     // If we have physical addresses directly (non-zero), set them and mark as translated
@@ -1179,6 +1149,18 @@ void O3_CPU::operate_lsq()
                     // add it to DTLB for translation
                     PACKET data_packet;
 
+                    // Skip if virtual address is 0 to prevent assertion failure
+                    if (SQ.entry[sq_index].virtual_address == 0) {
+                        std::cerr << "WARNING: Virtual address is 0 for store instr_id: " 
+                                  << SQ.entry[sq_index].instr_id << " - skipping store" << std::endl;
+                        RTS0[RTS0_head] = SQ_SIZE;
+                        RTS0_head++;
+                        if (RTS0_head == SQ_SIZE)
+                            RTS0_head = 0;
+                        store_issued++;
+                        continue;
+                    }
+
                     data_packet.tlb_access = 1;
                     data_packet.fill_level = FILL_L1;
                     data_packet.cpu = cpu;
@@ -1197,7 +1179,7 @@ void O3_CPU::operate_lsq()
                     data_packet.asid[1] = SQ.entry[sq_index].asid[1];
                     data_packet.event_cycle = SQ.entry[sq_index].event_cycle;
 
-                    data_packet.ipc_tag = SQ.entry[sq_index].ipc_tag; //NEW
+                    data_packet.ipc_tag = ROB.entry[SQ.entry[sq_index].rob_index].ipc_tag; //NEW
                     
 
                     DP (if (warmup_complete[cpu]) {
@@ -1272,6 +1254,18 @@ void O3_CPU::operate_lsq()
                     if (RTL1_tail == LQ_SIZE)
                         RTL1_tail = 0;
                 } else {
+                    // Skip if virtual address is 0 to prevent assertion failure
+                    if (LQ.entry[lq_index].virtual_address == 0) {
+                        std::cerr << "WARNING: Virtual address is 0 for load instr_id: " 
+                                  << LQ.entry[lq_index].instr_id << " - skipping load" << std::endl;
+                        RTL0[RTL0_head] = LQ_SIZE;
+                        RTL0_head++;
+                        if (RTL0_head == LQ_SIZE)
+                            RTL0_head = 0;
+                        load_issued++;
+                        continue;
+                    }
+
                     // add it to DTLB for translation
                     PACKET data_packet;
                     data_packet.fill_level = FILL_L1;
@@ -1440,9 +1434,14 @@ int O3_CPU::execute_load(uint32_t rob_index, uint32_t lq_index, uint32_t data_in
     if (LQ.entry[lq_index].physical_address != 0) {
         data_packet.address = LQ.entry[lq_index].physical_address >> LOG2_BLOCK_SIZE;
         data_packet.full_addr = LQ.entry[lq_index].physical_address;
-    } else {
+    } else if (LQ.entry[lq_index].virtual_address != 0) {
         data_packet.address = LQ.entry[lq_index].virtual_address >> LOG2_BLOCK_SIZE;
         data_packet.full_addr = LQ.entry[lq_index].virtual_address;
+    } else {
+        // Both addresses are 0 - skip this load to prevent assertion failure
+        std::cerr << "WARNING: Both physical and virtual addresses are 0 for load instr_id: " 
+                  << LQ.entry[lq_index].instr_id << " - skipping load" << std::endl;
+        return -2; // Return error to skip this load
     }
     
     data_packet.instr_id = LQ.entry[lq_index].instr_id;
@@ -1453,7 +1452,7 @@ int O3_CPU::execute_load(uint32_t rob_index, uint32_t lq_index, uint32_t data_in
     data_packet.asid[1] = LQ.entry[lq_index].asid[1];
     data_packet.event_cycle = LQ.entry[lq_index].event_cycle;
 
-    data_packet.ipc_tag = LQ.entry[lq_index].ipc_tag; //NEW
+    data_packet.ipc_tag = ROB.entry[rob_index].ipc_tag; //NEW
 
     int rq_index = L1D.add_rq(&data_packet);
 
@@ -1966,7 +1965,7 @@ void O3_CPU::retire_rob()
                         data_packet.asid[1] = SQ.entry[sq_index].asid[1];
                         data_packet.event_cycle = current_core_cycle[cpu];
 
-                        data_packet.ipc_tag = SQ.entry[sq_index].ipc_tag;  //NEW
+                        data_packet.ipc_tag = ROB.entry[ROB.head].ipc_tag;  //NEW
 
                         L1D.add_wq(&data_packet);
                     }

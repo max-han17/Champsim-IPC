@@ -105,6 +105,7 @@ void CACHE::handle_fill()
             // COLLECT STATS
             sim_miss[fill_cpu][MSHR.entry[mshr_index].type]++;
             sim_access[fill_cpu][MSHR.entry[mshr_index].type]++;
+            // Add IPC_TAG tracking
             ipc_tag_miss[MSHR.entry[mshr_index].ipc_tag]++;
             ipc_tag_access[MSHR.entry[mshr_index].ipc_tag]++;
 
@@ -162,7 +163,6 @@ void CACHE::handle_fill()
                     writeback_packet.instr_id = MSHR.entry[mshr_index].instr_id;
                     writeback_packet.ip = 0; // writeback does not have ip
                     writeback_packet.type = WRITEBACK;
-                    writeback_packet.ipc_tag = block[set][way].ipc_tag;
                     writeback_packet.event_cycle = current_core_cycle[fill_cpu];
 
                     lower_level->add_wq(&writeback_packet);
@@ -203,6 +203,7 @@ void CACHE::handle_fill()
             // COLLECT STATS
             sim_miss[fill_cpu][MSHR.entry[mshr_index].type]++;
             sim_access[fill_cpu][MSHR.entry[mshr_index].type]++;
+            // Add IPC_TAG tracking
             ipc_tag_miss[MSHR.entry[mshr_index].ipc_tag]++;
             ipc_tag_access[MSHR.entry[mshr_index].ipc_tag]++;
 
@@ -285,6 +286,7 @@ void CACHE::handle_writeback()
             // COLLECT STATS
             sim_hit[writeback_cpu][WQ.entry[index].type]++;
             sim_access[writeback_cpu][WQ.entry[index].type]++;
+            // Add IPC_TAG tracking
             ipc_tag_hit[WQ.entry[index].ipc_tag]++;
             ipc_tag_access[WQ.entry[index].ipc_tag]++;
 
@@ -447,7 +449,6 @@ void CACHE::handle_writeback()
                             writeback_packet.instr_id = WQ.entry[index].instr_id;
                             writeback_packet.ip = 0;
                             writeback_packet.type = WRITEBACK;
-                            writeback_packet.ipc_tag = block[set][way].ipc_tag;
                             writeback_packet.event_cycle = current_core_cycle[writeback_cpu];
 
                             lower_level->add_wq(&writeback_packet);
@@ -487,6 +488,7 @@ void CACHE::handle_writeback()
                     // COLLECT STATS
                     sim_miss[writeback_cpu][WQ.entry[index].type]++;
                     sim_access[writeback_cpu][WQ.entry[index].type]++;
+                    // Add IPC_TAG tracking
                     ipc_tag_miss[WQ.entry[index].ipc_tag]++;
                     ipc_tag_access[WQ.entry[index].ipc_tag]++;
 
@@ -584,6 +586,7 @@ void CACHE::handle_read()
                 // COLLECT STATS
                 sim_hit[read_cpu][RQ.entry[index].type]++;
                 sim_access[read_cpu][RQ.entry[index].type]++;
+                // Add IPC_TAG tracking
                 ipc_tag_hit[RQ.entry[index].ipc_tag]++;
                 ipc_tag_access[RQ.entry[index].ipc_tag]++;
 
@@ -823,6 +826,7 @@ void CACHE::handle_prefetch()
                 // COLLECT STATS
                 sim_hit[prefetch_cpu][PQ.entry[index].type]++;
                 sim_access[prefetch_cpu][PQ.entry[index].type]++;
+                // Add IPC_TAG tracking
                 ipc_tag_hit[PQ.entry[index].ipc_tag]++;
                 ipc_tag_access[PQ.entry[index].ipc_tag]++;
 
@@ -1052,7 +1056,6 @@ void CACHE::fill_cache(uint32_t set, uint32_t way, PACKET *packet)
     block[set][way].data = packet->data;
     block[set][way].cpu = packet->cpu;
     block[set][way].instr_id = packet->instr_id;
-    block[set][way].ipc_tag = packet->ipc_tag;
 
     DP ( if (warmup_complete[packet->cpu]) {
     cout << "[" << NAME << "] " << __func__ << " set: " << set << " way: " << way;

@@ -25,6 +25,8 @@ class BLOCK {
              cpu,
              instr_id;
 
+    uint8_t ipc_tag;
+
     // replacement state
     uint32_t lru;
 
@@ -45,6 +47,7 @@ class BLOCK {
         data = 0;
         cpu = 0;
         instr_id = 0;
+        ipc_tag = 0;
 
         lru = 0;
     };
@@ -336,7 +339,8 @@ class LSQ_ENTRY {
 
     uint8_t translated,
             fetched,
-            asid[2];
+            asid[2],
+            ipc_tag;
 // forwarding_depend_on_me[ROB_SIZE];
     fastset
 		forwarding_depend_on_me;
@@ -358,6 +362,7 @@ class LSQ_ENTRY {
         fetched = 0;
         asid[0] = UINT8_MAX;
         asid[1] = UINT8_MAX;
+        ipc_tag = 0;
 
 #if 0
         for (uint32_t i=0; i<ROB_SIZE; i++)

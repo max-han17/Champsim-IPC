@@ -2,6 +2,7 @@
 #define CACHE_H
 
 #include "memory_class.h"
+#include <map>
 
 // PAGE
 extern uint32_t PAGE_TABLE_LATENCY, SWAP_LATENCY;
@@ -115,6 +116,11 @@ class CACHE : public MEMORY {
              roi_miss[NUM_CPUS][NUM_TYPES];
 
     uint64_t total_miss_latency;
+
+    // IPC_TAG statistics
+    std::map<uint8_t, uint64_t> ipc_tag_access;  // Total accesses per ipc_tag
+    std::map<uint8_t, uint64_t> ipc_tag_hit;     // Total hits per ipc_tag
+    std::map<uint8_t, uint64_t> ipc_tag_miss;    // Total misses per ipc_tag
     
     // constructor
     CACHE(string v1, uint32_t v2, int v3, uint32_t v4, uint32_t v5, uint32_t v6, uint32_t v7, uint32_t v8) 
@@ -147,6 +153,11 @@ class CACHE : public MEMORY {
         }
 
 	total_miss_latency = 0;
+
+        // Initialize IPC_TAG statistics
+        ipc_tag_access.clear();
+        ipc_tag_hit.clear();
+        ipc_tag_miss.clear();
 
         lower_level = NULL;
         extra_interface = NULL;

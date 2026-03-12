@@ -4,6 +4,7 @@
 #include "ooo_cpu.h"
 #include "uncore.h"
 #include <fstream>
+#include <set>
 
 #define FIXED_FLOAT(x) std::fixed << std::setprecision(5) << (x)
 
@@ -98,6 +99,37 @@ void print_sim_stats(uint32_t cpu, CACHE *cache)
         << endl;
 }
 
+void print_ipc_tag_stats(uint32_t cpu, CACHE *cache)
+{
+    // Only print for L1D, L2C, and LLC
+    if (cache->cache_type != IS_L1D && 
+        cache->cache_type != IS_L2C && 
+        cache->cache_type != IS_LLC)
+        return;
+    
+    cout << endl << "Core_" << cpu << "_" << cache->NAME << "_IPC_TAG_Statistics:" << endl;
+    
+    // Get all unique ipc_tag values
+    std::set<uint8_t> all_tags;
+    for (auto& p : cache->ipc_tag_access) all_tags.insert(p.first);
+    for (auto& p : cache->ipc_tag_hit) all_tags.insert(p.first);
+    for (auto& p : cache->ipc_tag_miss) all_tags.insert(p.first);
+    
+    // Print statistics for each ipc_tag
+    for (uint8_t tag : all_tags) {
+        uint64_t access = cache->ipc_tag_access[tag];
+        uint64_t hit = cache->ipc_tag_hit[tag];
+        uint64_t miss = cache->ipc_tag_miss[tag];
+        
+        cout << "Core_" << cpu << "_" << cache->NAME << "_ipc_tag_" << (int)tag 
+             << "_access " << access << endl;
+        cout << "Core_" << cpu << "_" << cache->NAME << "_ipc_tag_" << (int)tag 
+             << "_hit " << hit << endl;
+        cout << "Core_" << cpu << "_" << cache->NAME << "_ipc_tag_" << (int)tag 
+             << "_miss " << miss << endl;
+    }
+}
+
 void print_branch_stats(uint32_t cpu)
 {
     // for (uint32_t i=0; i<NUM_CPUS; i++) {
@@ -147,6 +179,18 @@ void reset_cache_stats(uint32_t cpu, CACHE *cache)
     }
 
     cache->total_miss_latency = 0;
+
+    // Clear IPC tag statistics
+    cache->ipc_tag_access.clear();
+    cache->ipc_tag_hit.clear();
+    cache->ipc_tag_miss.clear();
+
+    //clear prefetch stats
+    cache->pf_requested = 0;
+    cache->pf_issued = 0;
+    cache->pf_useful = 0;
+    cache->pf_useless = 0;
+    cache->pf_late = 0;
 
     cache->RQ.ACCESS = 0;
     cache->RQ.MERGED = 0;
@@ -885,12 +929,15 @@ int main(int argc, char** argv)
             cout << " instructions: " << ooo_cpu[i].num_retired - ooo_cpu[i].begin_sim_instr << " cycles: " << current_core_cycle[i] - ooo_cpu[i].begin_sim_cycle << endl;
 #ifndef CRC2_COMPILE
             print_sim_stats(i, &ooo_cpu[i].L1D);
+            print_ipc_tag_stats(i, &ooo_cpu[i].L1D);
             print_sim_stats(i, &ooo_cpu[i].L1I);
             print_sim_stats(i, &ooo_cpu[i].L2C);
+            print_ipc_tag_stats(i, &ooo_cpu[i].L2C);
             ooo_cpu[i].L1D.l1d_prefetcher_final_stats();
             ooo_cpu[i].L2C.l2c_prefetcher_final_stats();
 #endif
             print_sim_stats(i, &uncore.LLC);
+            print_ipc_tag_stats(i, &uncore.LLC);
         }
         uncore.LLC.llc_prefetcher_final_stats();
     }
@@ -905,10 +952,13 @@ int main(int argc, char** argv)
 #ifndef CRC2_COMPILE
         print_branch_stats(i);
         print_roi_stats(i, &ooo_cpu[i].L1D);
+        print_ipc_tag_stats(i, &ooo_cpu[i].L1D);
         print_roi_stats(i, &ooo_cpu[i].L1I);
         print_roi_stats(i, &ooo_cpu[i].L2C);
+        print_ipc_tag_stats(i, &ooo_cpu[i].L2C);
 #endif
         print_roi_stats(i, &uncore.LLC);
+        print_ipc_tag_stats(i, &uncore.LLC);
         cout << "Core_" << i << "_major_page_fault " << major_fault[i] << endl
             << "Core_" << i << "_minor_page_fault " << minor_fault[i] << endl
             << endl;

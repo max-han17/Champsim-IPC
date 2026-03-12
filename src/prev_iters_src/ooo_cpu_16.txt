@@ -928,7 +928,6 @@ void O3_CPU::add_load_queue(uint32_t rob_index, uint32_t data_index)
     LQ.entry[lq_index].rob_index = rob_index;
     LQ.entry[lq_index].asid[0] = ROB.entry[rob_index].asid[0];
     LQ.entry[lq_index].asid[1] = ROB.entry[rob_index].asid[1];
-    LQ.entry[lq_index].ipc_tag = ROB.entry[rob_index].ipc_tag;
     LQ.entry[lq_index].event_cycle = current_core_cycle[cpu] + SCHEDULING_LATENCY;
     
     // If we have physical addresses directly (non-zero), set them and mark as translated
@@ -1125,7 +1124,6 @@ void O3_CPU::add_store_queue(uint32_t rob_index, uint32_t data_index)
     SQ.entry[sq_index].rob_index = rob_index;
     SQ.entry[sq_index].asid[0] = ROB.entry[rob_index].asid[0];
     SQ.entry[sq_index].asid[1] = ROB.entry[rob_index].asid[1];
-    SQ.entry[sq_index].ipc_tag = ROB.entry[rob_index].ipc_tag;
     SQ.entry[sq_index].event_cycle = current_core_cycle[cpu] + SCHEDULING_LATENCY;
     
     // If we have physical addresses directly (non-zero), set them and mark as translated
@@ -1197,7 +1195,7 @@ void O3_CPU::operate_lsq()
                     data_packet.asid[1] = SQ.entry[sq_index].asid[1];
                     data_packet.event_cycle = SQ.entry[sq_index].event_cycle;
 
-                    data_packet.ipc_tag = SQ.entry[sq_index].ipc_tag; //NEW
+                    data_packet.ipc_tag = ROB.entry[SQ.entry[sq_index].rob_index].ipc_tag; //NEW
                     
 
                     DP (if (warmup_complete[cpu]) {
@@ -1453,7 +1451,7 @@ int O3_CPU::execute_load(uint32_t rob_index, uint32_t lq_index, uint32_t data_in
     data_packet.asid[1] = LQ.entry[lq_index].asid[1];
     data_packet.event_cycle = LQ.entry[lq_index].event_cycle;
 
-    data_packet.ipc_tag = LQ.entry[lq_index].ipc_tag; //NEW
+    data_packet.ipc_tag = ROB.entry[rob_index].ipc_tag; //NEW
 
     int rq_index = L1D.add_rq(&data_packet);
 
@@ -1966,7 +1964,7 @@ void O3_CPU::retire_rob()
                         data_packet.asid[1] = SQ.entry[sq_index].asid[1];
                         data_packet.event_cycle = current_core_cycle[cpu];
 
-                        data_packet.ipc_tag = SQ.entry[sq_index].ipc_tag;  //NEW
+                        data_packet.ipc_tag = ROB.entry[ROB.head].ipc_tag;  //NEW
 
                         L1D.add_wq(&data_packet);
                     }
