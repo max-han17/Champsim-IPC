@@ -101,6 +101,12 @@ class CACHE : public MEMORY {
 	     pf_late,
              pf_fill;
 
+    // eviction stats (ROI only)
+    uint64_t evictions,          // total valid lines evicted
+             ipc_evictions,      // evicted lines that were IPC-tagged
+             prot_ipc_evictions, // IPC lines evicted while prot==1 (all ways were IPC+protected)
+             prot_marked;        // fetched lines marked protected (IPC-related fills)
+
     // queues
     PACKET_QUEUE WQ{NAME + "_WQ", WQ_SIZE}, // write queue
                  RQ{NAME + "_RQ", RQ_SIZE}, // read queue
@@ -171,6 +177,11 @@ class CACHE : public MEMORY {
         pf_useless = 0;
         pf_late = 0;
         pf_fill = 0;
+
+        evictions = 0;
+        ipc_evictions = 0;
+        prot_ipc_evictions = 0;
+        prot_marked = 0;
     };
 
     // destructor

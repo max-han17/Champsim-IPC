@@ -68,6 +68,10 @@ void print_roi_stats(uint32_t cpu, CACHE *cache)
         << "Core_" << cpu << "_" << cache->NAME << "_prefetch_useless " << cache->pf_useless << endl
         << "Core_" << cpu << "_" << cache->NAME << "_prefetch_late " << cache->pf_late << endl
         << "Core_" << cpu << "_" << cache->NAME << "_average_miss_latency " << (1.0*(cache->total_miss_latency))/TOTAL_MISS << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_evictions " << cache->evictions << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_ipc_evictions " << cache->ipc_evictions << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_prot_ipc_evictions " << cache->prot_ipc_evictions << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_prot_marked " << cache->prot_marked << endl
         << endl;
 }
 
@@ -127,6 +131,7 @@ void print_ipc_tag_stats(uint32_t cpu, CACHE *cache)
              << "_hit " << hit << endl;
         cout << "Core_" << cpu << "_" << cache->NAME << "_ipc_tag_" << (int)tag 
              << "_miss " << miss << endl;
+        cout << "######################## TESTING" << endl;
     }
 }
 

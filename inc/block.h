@@ -26,6 +26,7 @@ class BLOCK {
              instr_id;
 
     uint8_t ipc_tag;
+    uint8_t prot;  // IPC protection bit: gives IPC-tagged lines a second chance before eviction
 
     // replacement state
     uint32_t lru;
@@ -48,6 +49,7 @@ class BLOCK {
         cpu = 0;
         instr_id = 0;
         ipc_tag = 0;
+        prot = 0;
 
         lru = 0;
     };

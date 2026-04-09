@@ -206,6 +206,12 @@ void CACHE::handle_fill()
             ipc_tag_miss[MSHR.entry[mshr_index].ipc_tag]++;
             ipc_tag_access[MSHR.entry[mshr_index].ipc_tag]++;
 
+            // EVICTION STATS (ROI only): count valid lines being displaced
+            if (warmup_complete[fill_cpu] && block[set][way].valid) {
+                evictions++;
+                if (block[set][way].ipc_tag) ipc_evictions++;
+            }
+
             fill_cache(set, way, &MSHR.entry[mshr_index]);
 
             // RFO marks cache line dirty
@@ -489,6 +495,12 @@ void CACHE::handle_writeback()
                     sim_access[writeback_cpu][WQ.entry[index].type]++;
                     ipc_tag_miss[WQ.entry[index].ipc_tag]++;
                     ipc_tag_access[WQ.entry[index].ipc_tag]++;
+
+                    // EVICTION STATS (ROI only): count valid lines being displaced
+                    if (warmup_complete[writeback_cpu] && block[set][way].valid) {
+                        evictions++;
+                        if (block[set][way].ipc_tag) ipc_evictions++;
+                    }
 
                     fill_cache(set, way, &WQ.entry[index]);
 
@@ -1053,6 +1065,9 @@ void CACHE::fill_cache(uint32_t set, uint32_t way, PACKET *packet)
     block[set][way].cpu = packet->cpu;
     block[set][way].instr_id = packet->instr_id;
     block[set][way].ipc_tag = packet->ipc_tag;
+    block[set][way].prot = (packet->ipc_tag ? 1 : 0);  // IPC lines start protected
+    if (warmup_complete[packet->cpu] && block[set][way].prot)
+        prot_marked++;
 
     DP ( if (warmup_complete[packet->cpu]) {
     cout << "[" << NAME << "] " << __func__ << " set: " << set << " way: " << way;

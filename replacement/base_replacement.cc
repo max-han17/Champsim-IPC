@@ -2,15 +2,62 @@
 
 uint32_t CACHE::find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
-    // baseline LRU replacement policy for other caches 
+    // IPC-aware replacement policy for L2C
+    if (cache_type == IS_L2C) {
+        // Fill invalid way first
+        for (uint32_t way = 0; way < NUM_WAY; way++) {
+            if (block[set][way].valid == false)
+                return way;
+        }
+
+        // scan from LRU to MRU position
+        // Prefer non-IPC lines first, then unprotected IPC lines;
+        // give protected IPC lines a second chance by clearing prot and skipping.
+        for (uint32_t rank = NUM_WAY - 1; ; rank--) { //REMOVE THIS WRONG, can use the logic from lru_victim
+            // Find the way that holds this LRU rank
+            for (uint32_t way = 0; way < NUM_WAY; way++) {
+                if (block[set][way].lru == rank) {
+                    if (block[set][way].ipc_tag == 0) {
+                        // Non-IPC line: evict immediately
+                        return way;
+                    } else if (block[set][way].prot == 0) {
+                        // IPC line, already had its second chance: evict
+                        return way;
+                    } else {
+                        // IPC line, still protected: clear protection and skip
+                        block[set][way].prot = 0;
+                    }
+                    
+                    //note: add counter for how many times protection bit is used, or if the evicted lines are protected
+                    break;
+                }
+            }
+            if (rank == 0)
+                break;
+        }
+
+        // all ways were IPC+protected (prot bits now cleared above); evict LRU.
+        // Count this as a forced protected-IPC eviction.
+        if (warmup_complete[cpu])
+            prot_ipc_evictions++;
+        return lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type);
+    }
+
+    // baseline LRU replacement policy for all other cache levels
     return lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type); 
 }
 
 void CACHE::update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
 {
     if (type == WRITEBACK) {
-        if (hit) // wrietback hit does not update LRU state
+        if (hit) // writeback hit does not update LRU state
             return;
+    }
+
+    // IPC-aware protection refresh for L2C: on any hit to an IPC-tagged line,
+    // re-arm the protection bit so it gets another second chance on next eviction pass.
+    if (cache_type == IS_L2C && hit && block[set][way].ipc_tag == 1) {
+        block[set][way].prot = 1;
     }
 
     return lru_update(set, way);
