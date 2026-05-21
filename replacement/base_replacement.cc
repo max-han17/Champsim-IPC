@@ -10,25 +10,54 @@ uint32_t CACHE::find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const
                 return way;
         }
 
+        // Pure-LRU baseline victim for comparison counters.
+        uint32_t pure_lru_way = NUM_WAY;
+        for (uint32_t way = 0; way < NUM_WAY; way++) {
+            if (block[set][way].lru == NUM_WAY - 1) {
+                pure_lru_way = way;
+                break;
+            }
+        }
+        if (pure_lru_way == NUM_WAY) {
+            cerr << "[" << NAME << "] " << __func__ << " no pure LRU victim! set: " << set << endl;
+            assert(0);
+        }
+
         // scan from LRU to MRU position
         // Prefer non-IPC lines first, then unprotected IPC lines;
         // give protected IPC lines a second chance by clearing prot and skipping.
-        for (uint32_t rank = NUM_WAY - 1; ; rank--) { //REMOVE THIS WRONG, can use the logic from lru_victim
+        bool skipped_protected_ipc = false;
+        for (uint32_t rank = NUM_WAY - 1; ; rank--) {
             // Find the way that holds this LRU rank
             for (uint32_t way = 0; way < NUM_WAY; way++) {
                 if (block[set][way].lru == rank) {
                     if (block[set][way].ipc_tag == 0) {
                         // Non-IPC line: evict immediately
+                        if (warmup_complete[cpu]) {
+                            if (way == pure_lru_way)
+                                ipc_policy_same_as_lru++;
+                            else
+                                ipc_policy_diff_from_lru++;
+                            if (skipped_protected_ipc)
+                                ipc_policy_protected_skip_preserved++;
+                        }
                         return way;
                     } else if (block[set][way].prot == 0) {
                         // IPC line, already had its second chance: evict
+                        if (warmup_complete[cpu]) {
+                            if (way == pure_lru_way)
+                                ipc_policy_same_as_lru++;
+                            else
+                                ipc_policy_diff_from_lru++;
+                            if (skipped_protected_ipc)
+                                ipc_policy_protected_skip_preserved++;
+                        }
                         return way;
                     } else {
                         // IPC line, still protected: clear protection and skip
                         block[set][way].prot = 0;
+                        skipped_protected_ipc = true;
                     }
-                    
-                    //note: add counter for how many times protection bit is used, or if the evicted lines are protected
                     break;
                 }
             }
@@ -38,9 +67,12 @@ uint32_t CACHE::find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const
 
         // all ways were IPC+protected (prot bits now cleared above); evict LRU.
         // Count this as a forced protected-IPC eviction.
-        if (warmup_complete[cpu])
+        if (warmup_complete[cpu]) {
             prot_ipc_evictions++;
-        return lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type);
+            ipc_policy_fallback_all_prot++;
+            ipc_policy_same_as_lru++;
+        }
+        return pure_lru_way;
     }
 
     // baseline LRU replacement policy for all other cache levels

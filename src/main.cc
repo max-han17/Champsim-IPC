@@ -72,6 +72,10 @@ void print_roi_stats(uint32_t cpu, CACHE *cache)
         << "Core_" << cpu << "_" << cache->NAME << "_ipc_evictions " << cache->ipc_evictions << endl
         << "Core_" << cpu << "_" << cache->NAME << "_prot_ipc_evictions " << cache->prot_ipc_evictions << endl
         << "Core_" << cpu << "_" << cache->NAME << "_prot_marked " << cache->prot_marked << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_ipc_policy_same_as_lru " << cache->ipc_policy_same_as_lru << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_ipc_policy_diff_from_lru " << cache->ipc_policy_diff_from_lru << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_ipc_policy_fallback_all_prot " << cache->ipc_policy_fallback_all_prot << endl
+        << "Core_" << cpu << "_" << cache->NAME << "_ipc_policy_protected_skip_preserved " << cache->ipc_policy_protected_skip_preserved << endl
         << endl;
 }
 
@@ -184,6 +188,14 @@ void reset_cache_stats(uint32_t cpu, CACHE *cache)
     }
 
     cache->total_miss_latency = 0;
+    cache->evictions = 0;
+    cache->ipc_evictions = 0;
+    cache->prot_ipc_evictions = 0;
+    cache->prot_marked = 0;
+    cache->ipc_policy_same_as_lru = 0;
+    cache->ipc_policy_diff_from_lru = 0;
+    cache->ipc_policy_fallback_all_prot = 0;
+    cache->ipc_policy_protected_skip_preserved = 0;
 
     // Clear IPC tag statistics
     cache->ipc_tag_access.clear();

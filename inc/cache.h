@@ -105,7 +105,11 @@ class CACHE : public MEMORY {
     uint64_t evictions,          // total valid lines evicted
              ipc_evictions,      // evicted lines that were IPC-tagged
              prot_ipc_evictions, // IPC lines evicted while prot==1 (all ways were IPC+protected)
-             prot_marked;        // fetched lines marked protected (IPC-related fills)
+             prot_marked,        // fetched lines marked protected (IPC-related fills)
+             ipc_policy_same_as_lru,          // IPC-aware victim equals pure LRU victim
+             ipc_policy_diff_from_lru,        // IPC-aware victim differs from pure LRU victim
+             ipc_policy_fallback_all_prot,    // all lines protected IPC, fallback to LRU after clearing
+             ipc_policy_protected_skip_preserved; // skipped protected IPC line, selected another victim
 
     // queues
     PACKET_QUEUE WQ{NAME + "_WQ", WQ_SIZE}, // write queue
@@ -182,6 +186,10 @@ class CACHE : public MEMORY {
         ipc_evictions = 0;
         prot_ipc_evictions = 0;
         prot_marked = 0;
+        ipc_policy_same_as_lru = 0;
+        ipc_policy_diff_from_lru = 0;
+        ipc_policy_fallback_all_prot = 0;
+        ipc_policy_protected_skip_preserved = 0;
     };
 
     // destructor
