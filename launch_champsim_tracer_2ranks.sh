@@ -20,7 +20,7 @@ ITERS=$3
 echo "[Rank $RANK] Starting trace with physical address translation..."
 
 if [ "$RANK" -eq 0 ]; then
-    exec $PIN_BIN -t $TRACER_SO -o $TRACE_DIR/trace_rank0_$TRACE_INSTR.champsim -s $SKIP_INSTR -t $TRACE_INSTR -- $APP $ITERS $IN_FLIGHT $PRIV_WS_KB $CHASE_STEPS
+    exec $PIN_BIN -t $TRACER_SO -o $TRACE_DIR/trace_rank0_$TRACE_INSTR.champsim -s $SKIP_INSTR -t $TRACE_INSTR -- $APP $ITERS
 else
-    exec $PIN_BIN -t $TRACER_SO -o $TRACE_DIR/trace_rank1_$TRACE_INSTR.champsim -s $SKIP_INSTR -t $TRACE_INSTR -- $APP $ITERS $IN_FLIGHT $PRIV_WS_KB $CHASE_STEPS
+    exec $PIN_BIN -t $TRACER_SO -o $TRACE_DIR/trace_rank1_$TRACE_INSTR.champsim -s $SKIP_INSTR -t $TRACE_INSTR -- $APP $ITERS
 fi
