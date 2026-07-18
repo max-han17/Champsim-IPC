@@ -1,0 +1,139 @@
+#include "cache.h"
+#include <cstdlib>
+#include <ctime>
+
+#define maxRRPV 3
+#define NUM_POLICY 2
+#define SDM_SIZE 32
+#define BIP_MAX 32
+#define PSEL_WIDTH 10
+#define PSEL_MAX ((1<<PSEL_WIDTH)-1)
+#define PSEL_THRS PSEL_MAX/2
+
+static uint32_t rrpv[NUM_CPUS][L2C_SET][L2C_WAY],
+         bip_counter[NUM_CPUS],
+         PSEL[NUM_CPUS];
+static unsigned rand_sets[NUM_CPUS][NUM_POLICY*SDM_SIZE];
+
+void CACHE::l2c_initialize_replacement()
+{
+    if (cache_type != IS_L2C)
+        return;
+
+    if (cpu == 0)
+        cout << "Initialize DRRIP-L2C state" << endl;
+
+    for (int i=0; i<L2C_SET; i++) {
+        for (int j=0; j<L2C_WAY; j++)
+            rrpv[cpu][i][j] = maxRRPV;
+    }
+
+    // randomly selected sampler sets per core
+    srand(time(NULL));
+    unsigned long rand_seed = cpu + 1;
+    unsigned long max_rand = 1048576;
+    int do_again = 0;
+    for (int i=0; i<NUM_POLICY*SDM_SIZE; i++) {
+        do {
+            do_again = 0;
+            rand_seed = rand_seed * 1103515245 + 12345;
+            rand_sets[cpu][i] = ((unsigned) ((rand_seed/65536) % max_rand)) % L2C_SET;
+            for (int j=0; j<i; j++) {
+                if (rand_sets[cpu][i] == rand_sets[cpu][j]) {
+                    do_again = 1;
+                    break;
+                }
+            }
+        } while (do_again);
+    }
+
+    PSEL[cpu] = 0;
+    bip_counter[cpu] = 0;
+}
+
+static int is_it_leader(uint32_t cpu, uint32_t set)
+{
+    for (uint32_t i=0; i<NUM_POLICY*SDM_SIZE; i++)
+        if (rand_sets[cpu][i] == set)
+            return (i / SDM_SIZE);
+
+    return -1;
+}
+
+// called on every cache hit and cache fill
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
+{
+    // do not update replacement state for writebacks
+    if (type == WRITEBACK) {
+        rrpv[cpu][set][way] = maxRRPV-1;
+        return;
+    }
+
+    // cache hit
+    if (hit) {
+        rrpv[cpu][set][way] = 0; // DRRIP hit promotion to MRU
+        return;
+    }
+
+    // cache miss
+    int leader = is_it_leader(cpu, set);
+
+    if (leader == -1) { // follower sets
+        if (PSEL[cpu] > PSEL_THRS) { // follow BIP
+            rrpv[cpu][set][way] = maxRRPV;
+
+            bip_counter[cpu]++;
+            if (bip_counter[cpu] == BIP_MAX)
+                bip_counter[cpu] = 0;
+            if (bip_counter[cpu] == 0)
+                rrpv[cpu][set][way] = maxRRPV-1;
+        } else // follow SRRIP
+            rrpv[cpu][set][way] = maxRRPV-1;
+
+    } else if (leader == 0) { // leader 0: BIP
+        if (PSEL[cpu] > 0) PSEL[cpu]--;
+        rrpv[cpu][set][way] = maxRRPV;
+
+        bip_counter[cpu]++;
+        if (bip_counter[cpu] == BIP_MAX) bip_counter[cpu] = 0;
+        if (bip_counter[cpu] == 0) rrpv[cpu][set][way] = maxRRPV-1;
+
+    } else if (leader == 1) { // leader 1: SRRIP
+        if (PSEL[cpu] < PSEL_MAX) PSEL[cpu]++;
+        rrpv[cpu][set][way] = maxRRPV-1;
+
+    } else // WE SHOULD NOT REACH HERE
+        assert(0);
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+    // fill invalid line first
+    for (uint32_t way=0; way<L2C_WAY; way++) {
+        if (block[set][way].valid == false)
+            return way;
+    }
+
+    // look for the maxRRPV line
+    while (1)
+    {
+        for (int i=0; i<L2C_WAY; i++)
+            if (rrpv[cpu][set][i] == maxRRPV)
+                return i;
+
+        for (int i=0; i<L2C_WAY; i++)
+            if (rrpv[cpu][set][i] < maxRRPV)
+                rrpv[cpu][set][i]++;
+    }
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
+    return 0;
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats()
+{
+
+}

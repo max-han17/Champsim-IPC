@@ -9,10 +9,10 @@
 #define PSEL_MAX ((1<<PSEL_WIDTH)-1)
 #define PSEL_THRS PSEL_MAX/2
 
-uint32_t rrpv[LLC_SET][LLC_WAY],
+static uint32_t rrpv[LLC_SET][LLC_WAY],
          bip_counter = 0,
          PSEL[NUM_CPUS];
-unsigned rand_sets[TOTAL_SDM_SETS];
+static unsigned rand_sets[TOTAL_SDM_SETS];
 
 void CACHE::llc_initialize_replacement()
 {
@@ -49,7 +49,7 @@ void CACHE::llc_initialize_replacement()
         PSEL[i] = 0;
 }
 
-int is_it_leader(uint32_t cpu, uint32_t set)
+static int is_it_leader(uint32_t cpu, uint32_t set)
 {
     uint32_t start = cpu * NUM_POLICY * SDM_SIZE,
              end = start + NUM_POLICY * SDM_SIZE;

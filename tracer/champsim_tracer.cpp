@@ -14,66 +14,8 @@
 #include <errno.h>
 
 #include <fstream> 
-using namespace std;
 
-
-struct MemoryRange {
-    uint64_t start;
-    uint64_t end;
-    string name;
-};
-
-std::vector<MemoryRange> g_ipc_ranges;
-
-void DiscoverIpcRanges() {
-    std::ifstream maps("/proc/self/maps");
-    std::string line;
-    const size_t npos_val = (size_t)-1;
-
-    while (std::getline(maps, line)) {
-        // Look for ANY entry containing /dev/shm
-        if (line.find("/dev/shm") != npos_val) {
-            uint64_t start, end;
-            char perms[5];
-            char path[512];
-            
-            // Debug: Show us what you found
-            // std::cout << "[DEBUG MAPS] Found: " << line << std::endl;
-
-            // Parse: address range, permissions, and path
-            if (sscanf(line.c_str(), "%lx-%lx %4s %*s %*s %*s %s", &start, &end, perms, path) >= 3) {
-                // Check for duplicates
-                bool exists = false;
-                for (const auto& r : g_ipc_ranges) {
-                    if (r.start == start) { exists = true; break; }
-                }
-
-                if (!exists) {
-                    MemoryRange range;
-                    range.start = start;
-                    range.end = end;
-                    range.name = std::string(path);
-                    g_ipc_ranges.push_back(range);
-                    
-                    std::cout << "[PIN SUCCESS] Registered IPC: " << path 
-                              << " [" << perms << "] at " << std::hex << start << std::dec << std::endl;
-                }
-            }
-        }
-    }
-}
-
-// void LoadIpcTags() { 
-//     std::ifstream in("/tmp/ipc_tags.txt"); 
-//     uint64_t addr; 
-//     while (in >> std::hex >> addr) { 
-//         ipc_addrs.insert(addr); 
-//     }
-// }
-
-// ============================================================================
-// VA->PA Translation Support
-// ============================================================================
+std::unordered_set<uintptr_t> ipc_addrs; 
 
 // Pagemap constants
 #define PAGEMAP_ENTRY_SIZE 8
@@ -216,8 +158,6 @@ public:
 
 // Global translator instance
 AddressTranslator* g_translator = nullptr; 
-bool g_ipc_discovered = false;
-UINT64 last_scan_instr = 0;
 
 using namespace std;
 #define NUM_INSTR_DESTINATIONS 2
@@ -235,7 +175,6 @@ typedef struct trace_instr_format {
     unsigned long long int destination_memory[NUM_INSTR_DESTINATIONS]; // output memory
     unsigned long long int source_memory[NUM_INSTR_SOURCES];           // input memory
     
-
     uint8_t ipc_tag; //1 = IPC-related, 0 = not
 
 } trace_instr_format_t;
@@ -246,17 +185,27 @@ struct meta_info_t {
     uint64_t timestamp;
 };
 
+FILE* meta_out;
+
 /* ================================================================== */
 // Global variables 
 /* ================================================================== */
 
 UINT64 instrCount = 0;
+UINT64 tracedInstrCount = 0; //how many instructions traced
+
 FILE* out;
-FILE* meta_out;
+FILE* out_va;
+
 bool output_file_closed = false;
+bool output_va_file_closed = false;
 bool tracing_on = false;
 
 trace_instr_format_t curr_instr;
+trace_instr_format_t curr_instr_va;
+
+bool roi_found = false;
+bool roi_terminated = false;
 
 /* ===================================================================== */
 // Command line switches
@@ -293,102 +242,107 @@ INT32 Usage()
 // Analysis routines
 /* ===================================================================== */
 
+void CloseOutputFiles() {
+    if(!output_file_closed) {
+        std::cout << "[PinTool] Closing trace files. Total traced: " << tracedInstrCount << std::endl;
+        if (out) fclose(out);
+        if (out_va) fclose(out_va);
+        if (meta_out) fclose(meta_out);
+        output_file_closed = true;
+        output_va_file_closed = true;
+    }
+}
+
+void StartROI() { 
+    if (!roi_found) {
+        std::cout << "[PinTool] ROI Begin Marker Hit. Tracing started." << std::endl;
+        roi_found = true;
+        tracing_on = true; 
+    }
+}
+
+void StopROI() { 
+    if (roi_found && !roi_terminated) {
+        std::cout << "[PinTool] ROI End Marker Hit. Tracing stopped." << std::endl;
+        tracing_on = false;
+        roi_terminated = true;
+        CloseOutputFiles();
+    }
+}
+
 void BeginInstruction(VOID *ip, UINT32 op_code, VOID *opstring)
 {
     instrCount++;
-    //printf("[%p %u %s ", ip, opcode, (char*)opstring);
 
-    if(instrCount > KnobSkipInstructions.Value()) 
-    {
-        tracing_on = true;
+    // 1. Fallback Start (if ROI hasn't been found)
+    if (!roi_found && !roi_terminated) {
+        if(instrCount > KnobSkipInstructions.Value()) 
+        {
+            tracing_on = true;
+        }
+    }
 
-        if(instrCount > (KnobTraceInstructions.Value()+KnobSkipInstructions.Value()))
+    // 2. Relative Stop (after tracing KnobTraceInstructions)
+    if (tracing_on) {
+        if (tracedInstrCount >= KnobTraceInstructions.Value()) {
             tracing_on = false;
+            roi_terminated = true;
+            CloseOutputFiles();
+        }
     }
 
     if(!tracing_on) 
         return;
 
+    tracedInstrCount++;
+
     // reset the current instruction
     curr_instr.ip = (uint64_t)ip;
+    curr_instr_va.ip = (uint64_t)ip;
 
     curr_instr.is_branch = 0;
     curr_instr.branch_taken = 0;
+    curr_instr_va.is_branch = 0;
+    curr_instr_va.branch_taken = 0;
 
     for(int i=0; i<NUM_INSTR_DESTINATIONS; i++) 
     {
         curr_instr.destination_registers[i] = 0;
         curr_instr.destination_memory[i] = 0;
+        curr_instr_va.destination_registers[i] = 0;
+        curr_instr_va.destination_memory[i] = 0;
     }
 
     for(int i=0; i<NUM_INSTR_SOURCES; i++) 
     {
         curr_instr.source_registers[i] = 0;
         curr_instr.source_memory[i] = 0;
+        curr_instr_va.source_registers[i] = 0;
+        curr_instr_va.source_memory[i] = 0;
     }
 
 
     //init ipc tag flag
     curr_instr.ipc_tag = 0; 
-}
-
-void CheckIpcRange(uint64_t vaddr) {
-    if (g_ipc_ranges.empty()) {
-        if (instrCount > last_scan_instr + 50000) {
-            last_scan_instr = instrCount;
-            DiscoverIpcRanges();
-        }
-    }
-
-    // Online Tagging Logic: Check if virtual address is in any discovered SHM range
-    for (const auto& range : g_ipc_ranges) {
-        if (vaddr >= range.start && vaddr < range.end) {
-            curr_instr.ipc_tag = 1;
-            break;
-        }
-    }
+    curr_instr_va.ipc_tag = 0; 
 }
 
 void EndInstruction()
 {
-    //printf("%d]\n", (int)instrCount);
-
-    //printf("\n");
-
-    if(instrCount > KnobSkipInstructions.Value())
+    if(tracing_on)
     {
-        tracing_on = true;
+        // keep tracing
+        fwrite(&curr_instr, sizeof(trace_instr_format_t), 1, out);
+        fwrite(&curr_instr_va, sizeof(trace_instr_format_t), 1, out_va);
 
-        if(instrCount <= (KnobTraceInstructions.Value()+KnobSkipInstructions.Value()))
-        {
-            // keep tracing
-            fwrite(&curr_instr, sizeof(trace_instr_format_t), 1, out);
+        //write to metadata file
+        meta_info_t meta;
+        const char* rank_env = getenv("OMPI_COMM_WORLD_RANK");
+        meta.mpi_rank = rank_env ? atoi(rank_env) : -1;
+        meta.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 
-            //write to metadata file
-            meta_info_t meta;
-            const char* rank_env = getenv("OMPI_COMM_WORLD_RANK");
-            meta.mpi_rank = rank_env ? atoi(rank_env) : -1;
-            meta.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-
-            fwrite(&meta, sizeof(meta_info_t), 1, meta_out);
-
-        }
-        else
-        {
-            tracing_on = false;
-            // close down the file, we're done tracing
-            if(!output_file_closed)
-            {
-                fclose(out);
-
-                //close the new metadata file
-                fclose(meta_out);
-                output_file_closed = true;
-            }
-
-            // exit(0);
-        }
+        fwrite(&meta, sizeof(meta_info_t), 1, meta_out);
     }
 }
 
@@ -397,9 +351,11 @@ void BranchOrNot(UINT32 taken)
     //printf("[%d] ", taken);
 
     curr_instr.is_branch = 1;
+    curr_instr_va.is_branch = 1;
     if(taken != 0)
     {
         curr_instr.branch_taken = 1;
+        curr_instr_va.branch_taken = 1;
     }
 }
 
@@ -439,6 +395,7 @@ void RegRead(UINT32 i, UINT32 index)
             if(curr_instr.source_registers[i] == 0)
             {
                 curr_instr.source_registers[i] = (unsigned char)r;
+                curr_instr_va.source_registers[i] = (unsigned char)r;
                 break;
             }
         }
@@ -480,6 +437,7 @@ void RegWrite(REG i, UINT32 index)
             if(curr_instr.destination_registers[i] == 0)
             {
                 curr_instr.destination_registers[i] = (unsigned char)r;
+                curr_instr_va.destination_registers[i] = (unsigned char)r;
                 break;
             }
         }
@@ -499,8 +457,6 @@ void MemoryRead(VOID* addr, UINT32 index, UINT32 read_size)
     //printf("0x%llx,%u ", (unsigned long long int)addr, read_size);
 
     uint64_t vaddr = (uint64_t)addr;
-
-    CheckIpcRange(vaddr);
     
     // Translate virtual address to physical address
     uint64_t paddr = vaddr;
@@ -525,6 +481,7 @@ void MemoryRead(VOID* addr, UINT32 index, UINT32 read_size)
             if(curr_instr.source_memory[i] == 0)
             {
                 curr_instr.source_memory[i] = paddr;  // Store physical address
+                curr_instr_va.source_memory[i] = vaddr; // Store virtual address
                 break;
             }
         }
@@ -533,6 +490,7 @@ void MemoryRead(VOID* addr, UINT32 index, UINT32 read_size)
     // Check IPC tags using original virtual address
     // if (ipc_addrs.find(vaddr) != ipc_addrs.end()) { 
     //     curr_instr.ipc_tag = 1; 
+    //     curr_instr_va.ipc_tag = 1; 
     // } 
 }
 
@@ -567,6 +525,7 @@ void MemoryWrite(VOID* addr, UINT32 index)
             if(curr_instr.destination_memory[i] == 0)
             {
                 curr_instr.destination_memory[i] = paddr;  // Store physical address
+                curr_instr_va.destination_memory[i] = vaddr; // Store virtual address
                 break;
             }
         }
@@ -581,6 +540,7 @@ void MemoryWrite(VOID* addr, UINT32 index)
     // Check IPC tags using original virtual address
     // if (ipc_addrs.find(vaddr) != ipc_addrs.end()) { 
     //     curr_instr.ipc_tag = 1; 
+    //     curr_instr_va.ipc_tag = 1; 
     // } 
 }
 
@@ -591,6 +551,21 @@ void MemoryWrite(VOID* addr, UINT32 index)
 // Is called for every instruction and instruments reads and writes
 VOID Instruction(INS ins, VOID *v)
 {
+    // ROI Markers: xchg bx, bx (Start) and xchg cx, cx (Stop)
+    if (INS_IsXchg(ins) && INS_OperandCount(ins) >= 2 &&
+        INS_OperandIsReg(ins, 0) && REG_FullRegName(INS_OperandReg(ins, 0)) == REG_GBX &&
+        INS_OperandIsReg(ins, 1) && REG_FullRegName(INS_OperandReg(ins, 1)) == REG_GBX) {
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)StartROI, IARG_END);
+    }
+
+    if (INS_IsXchg(ins) && INS_OperandCount(ins) >= 2 &&
+        INS_OperandIsReg(ins, 0) && REG_FullRegName(INS_OperandReg(ins, 0)) == REG_GCX &&
+        INS_OperandIsReg(ins, 1) && REG_FullRegName(INS_OperandReg(ins, 1)) == REG_GCX) {
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)StopROI, IARG_END);
+    }
+
+    
+
     // begin each instruction with this function
     UINT32 opcode = INS_Opcode(ins);
     INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)BeginInstruction, IARG_INST_PTR, IARG_UINT32, opcode, IARG_END);
@@ -657,12 +632,8 @@ VOID Instruction(INS ins, VOID *v)
 VOID Fini(INT32 code, VOID *v)
 {
     // close the file if it hasn't already been closed
-    if(!output_file_closed) 
-    {
-        fclose(out);
-        fclose(meta_out);
-        output_file_closed = true;
-    }
+    std::cout << "Final Instruction Count: " << instrCount << std::endl;
+    CloseOutputFiles();
     
     // Clean up the address translator
     if (g_translator != nullptr) {
@@ -694,6 +665,14 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    std::string va_file_name = std::string(fileName) + ".virtual";
+    out_va = fopen(va_file_name.c_str(), "ab");
+    if (!out_va) 
+    {
+        cout << "Couldn't open virtual output trace file. Exiting." << endl;
+        exit(1);
+    }
+
     //init meta data
     std::string meta_file_name = std::string(fileName) + ".meta";
     meta_out = fopen(meta_file_name.c_str(), "wb");
@@ -716,8 +695,6 @@ int main(int argc, char *argv[])
     }
 
     // cout << "THIS IS SIZE OF TRACE INSTR FORMAT : " << sizeof(trace_instr_format) << endl;
-
-    
     g_translator = new AddressTranslator();
     if (!g_translator->is_initialized()) {
         cerr << "WARNING: Address translator initialization incomplete." << endl;
@@ -735,9 +712,6 @@ int main(int argc, char *argv[])
     //cerr <<  "This application is instrumented by the Champsim Trace Generator" << endl;
     //cerr <<  "Trace saved in " << KnobOutputFile.Value() << endl;
     //cerr <<  "===============================================" << endl;
-
-    //load ipc tags from /tmp/ipc_tags.txt 
-    // LoadIpcTags(); 
 
     // Start the program, never returns
     PIN_StartProgram();

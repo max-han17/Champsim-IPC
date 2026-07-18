@@ -85,7 +85,10 @@ void CACHE::handle_fill()
 
         // find victim
         uint32_t set = get_set(MSHR.entry[mshr_index].address), way;
-        if (cache_type == IS_LLC) {
+        if (cache_type == IS_L2C) {
+            way = l2c_find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
+        }
+        else if (cache_type == IS_LLC) {
             way = llc_find_victim(fill_cpu, MSHR.entry[mshr_index].instr_id, set, block[set], MSHR.entry[mshr_index].ip, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].type);
         }
         else
@@ -95,7 +98,10 @@ void CACHE::handle_fill()
         if ((cache_type == IS_LLC) && (way == LLC_WAY)) { // this is a bypass that does not fill the LLC
 
             // update replacement policy
-            if (cache_type == IS_LLC) {
+            if (cache_type == IS_L2C) {
+                l2c_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, 0, MSHR.entry[mshr_index].type, 0);
+            }
+            else if (cache_type == IS_LLC) {
                 llc_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, 0, MSHR.entry[mshr_index].type, 0);
 
             }
@@ -194,13 +200,20 @@ void CACHE::handle_fill()
 	      }
               
             // update replacement policy
-            if (cache_type == IS_LLC) {
+            if (cache_type == IS_L2C) {
+                l2c_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, block[set][way].full_addr, MSHR.entry[mshr_index].type, 0);
+            }
+            else if (cache_type == IS_LLC) {
                 llc_update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, block[set][way].full_addr, MSHR.entry[mshr_index].type, 0);
             }
             else
                 update_replacement_state(fill_cpu, set, way, MSHR.entry[mshr_index].full_addr, MSHR.entry[mshr_index].ip, block[set][way].full_addr, MSHR.entry[mshr_index].type, 0);
 
             // COLLECT STATS
+            llc_track_reuse_miss(MSHR.entry[mshr_index].type,
+                                 MSHR.entry[mshr_index].ipc_tag,
+                                 MSHR.entry[mshr_index].address,
+                                 !warmup_complete[fill_cpu]);
             sim_miss[fill_cpu][MSHR.entry[mshr_index].type]++;
             sim_access[fill_cpu][MSHR.entry[mshr_index].type]++;
             ipc_tag_miss[MSHR.entry[mshr_index].ipc_tag]++;
@@ -210,6 +223,8 @@ void CACHE::handle_fill()
             if (warmup_complete[fill_cpu] && block[set][way].valid) {
                 evictions++;
                 if (block[set][way].ipc_tag) ipc_evictions++;
+                llc_insert_ghost_eviction(block[set][way].address);
+                llc_track_ipc_eviction(block[set][way].ipc_tag, block[set][way].dirty);
             }
 
             fill_cache(set, way, &MSHR.entry[mshr_index]);
@@ -281,7 +296,10 @@ void CACHE::handle_writeback()
         
         if (way >= 0) { // writeback hit (or RFO hit for L1D)
 
-            if (cache_type == IS_LLC) {
+            if (cache_type == IS_L2C) {
+                l2c_update_replacement_state(writeback_cpu, set, way, block[set][way].full_addr, WQ.entry[index].ip, 0, WQ.entry[index].type, 1);
+            }
+            else if (cache_type == IS_LLC) {
                 llc_update_replacement_state(writeback_cpu, set, way, block[set][way].full_addr, WQ.entry[index].ip, 0, WQ.entry[index].type, 1);
 
             }
@@ -410,7 +428,10 @@ void CACHE::handle_writeback()
             else {
                 // find victim
                 uint32_t set = get_set(WQ.entry[index].address), way;
-                if (cache_type == IS_LLC) {
+                if (cache_type == IS_L2C) {
+                    way = l2c_find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
+                }
+                else if (cache_type == IS_LLC) {
                     way = llc_find_victim(writeback_cpu, WQ.entry[index].instr_id, set, block[set], WQ.entry[index].ip, WQ.entry[index].full_addr, WQ.entry[index].type);
                 }
                 else
@@ -484,7 +505,10 @@ void CACHE::handle_writeback()
 		      }
 
                     // update replacement policy
-                    if (cache_type == IS_LLC) {
+                    if (cache_type == IS_L2C) {
+                        l2c_update_replacement_state(writeback_cpu, set, way, WQ.entry[index].full_addr, WQ.entry[index].ip, block[set][way].full_addr, WQ.entry[index].type, 0);
+                    }
+                    else if (cache_type == IS_LLC) {
                         llc_update_replacement_state(writeback_cpu, set, way, WQ.entry[index].full_addr, WQ.entry[index].ip, block[set][way].full_addr, WQ.entry[index].type, 0);
                     }
                     else
@@ -500,6 +524,8 @@ void CACHE::handle_writeback()
                     if (warmup_complete[writeback_cpu] && block[set][way].valid) {
                         evictions++;
                         if (block[set][way].ipc_tag) ipc_evictions++;
+                        llc_insert_ghost_eviction(block[set][way].address);
+                        llc_track_ipc_eviction(block[set][way].ipc_tag, block[set][way].dirty);
                     }
 
                     fill_cache(set, way, &WQ.entry[index]);
@@ -586,7 +612,10 @@ void CACHE::handle_read()
                 }
 
                 // update replacement policy
-                if (cache_type == IS_LLC) {
+                if (cache_type == IS_L2C) {
+                    l2c_update_replacement_state(read_cpu, set, way, block[set][way].full_addr, RQ.entry[index].ip, 0, RQ.entry[index].type, 1);
+                }
+                else if (cache_type == IS_LLC) {
                     llc_update_replacement_state(read_cpu, set, way, block[set][way].full_addr, RQ.entry[index].ip, 0, RQ.entry[index].type, 1);
 
                 }
@@ -629,6 +658,11 @@ void CACHE::handle_read()
                 cout << " instr_id: " << RQ.entry[index].instr_id << " address: " << hex << RQ.entry[index].address;
                 cout << " full_addr: " << RQ.entry[index].full_addr << dec;
                 cout << " cycle: " << RQ.entry[index].event_cycle << endl; });
+
+                llc_check_ghost_hit(RQ.entry[index].type,
+                                    RQ.entry[index].ipc_tag,
+                                    RQ.entry[index].address,
+                                    !warmup_complete[read_cpu]);
 
                 // check mshr
                 uint8_t miss_handled = 1;
@@ -825,7 +859,10 @@ void CACHE::handle_prefetch()
             if (way >= 0) { // prefetch hit
 
                 // update replacement policy
-                if (cache_type == IS_LLC) {
+                if (cache_type == IS_L2C) {
+                    l2c_update_replacement_state(prefetch_cpu, set, way, block[set][way].full_addr, PQ.entry[index].ip, 0, PQ.entry[index].type, 1);
+                }
+                else if (cache_type == IS_LLC) {
                     llc_update_replacement_state(prefetch_cpu, set, way, block[set][way].full_addr, PQ.entry[index].ip, 0, PQ.entry[index].type, 1);
 
                 }
@@ -1634,5 +1671,101 @@ void CACHE::prefetcher_feedback(uint64_t &pref_gen, uint64_t &pref_fill, uint64_
     pref_fill = pf_fill;
     pref_used = pf_useful;
     pref_late = pf_late;
+}
+
+void CACHE::llc_track_reuse_miss(uint32_t req_type, uint8_t ipc_tag, uint64_t line_addr, bool in_warmup)
+{
+    if (cache_type != IS_LLC)
+        return;
+
+    int type_idx = -1;
+    if (req_type == LOAD)
+        type_idx = 0;
+    else if (req_type == RFO)
+        type_idx = 1;
+    else
+        return;
+
+    uint32_t ipc_bucket = (ipc_tag == 0) ? 0 : 1;
+    auto insert_result = llc_ever_seen.insert(line_addr);
+
+    if (in_warmup)
+        return;
+
+    if (insert_result.second)
+        llc_first_touch_miss[ipc_bucket][type_idx]++;
+    else
+        llc_reload_miss[ipc_bucket][type_idx]++;
+}
+
+void CACHE::llc_check_ghost_hit(uint32_t req_type, uint8_t ipc_tag, uint64_t line_addr, bool in_warmup)
+{
+    if (cache_type != IS_LLC)
+        return;
+
+    int type_idx = -1;
+    if (req_type == LOAD)
+        type_idx = 0;
+    else if (req_type == RFO)
+        type_idx = 1;
+    else
+        return;
+
+    auto it = llc_ghost_map.find(line_addr);
+    if (it == llc_ghost_map.end())
+        return;
+
+    llc_ghost_map.erase(it);
+
+    if (in_warmup)
+        return;
+
+    uint32_t ipc_bucket = (ipc_tag == 0) ? 0 : 1;
+    llc_ghost_hit[ipc_bucket][type_idx]++;
+}
+
+void CACHE::llc_insert_ghost_eviction(uint64_t line_addr)
+{
+    if (cache_type != IS_LLC)
+        return;
+
+    llc_ghost_queue.push_back(line_addr);
+    llc_ghost_map[line_addr]++;
+
+    if (llc_ghost_queue.size() > LLC_GHOST_SIZE) {
+        uint64_t oldest = llc_ghost_queue.front();
+        llc_ghost_queue.pop_front();
+        auto it = llc_ghost_map.find(oldest);
+        if (it != llc_ghost_map.end()) {
+            if (it->second > 1)
+                it->second--;
+            else
+                llc_ghost_map.erase(it);
+        }
+    }
+}
+
+void CACHE::llc_track_ipc_eviction(uint8_t ipc_tag, bool is_dirty)
+{
+    if (cache_type != IS_LLC)
+        return;
+
+    uint32_t ipc_bucket = (ipc_tag == 0) ? 0 : 1;
+    llc_ipc_evictions[ipc_bucket]++;
+    if (is_dirty)
+        llc_ipc_dirty_evictions[ipc_bucket]++;
+}
+
+void CACHE::reset_llc_reuse_counters()
+{
+    for (uint32_t ipc_idx = 0; ipc_idx < 2; ipc_idx++) {
+        for (uint32_t type_idx = 0; type_idx < 2; type_idx++) {
+            llc_first_touch_miss[ipc_idx][type_idx] = 0;
+            llc_reload_miss[ipc_idx][type_idx] = 0;
+            llc_ghost_hit[ipc_idx][type_idx] = 0;
+        }
+        llc_ipc_evictions[ipc_idx] = 0;
+        llc_ipc_dirty_evictions[ipc_idx] = 0;
+    }
 }
 

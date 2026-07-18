@@ -2,7 +2,10 @@
 #define CACHE_H
 
 #include "memory_class.h"
+#include <deque>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 // PAGE
 extern uint32_t PAGE_TABLE_LATENCY, SWAP_LATENCY;
@@ -83,6 +86,8 @@ void print_cache_config();
 
 class CACHE : public MEMORY {
   public:
+    static constexpr size_t LLC_GHOST_SIZE = 16384; // Half of LLC lines (2048*16/2)
+
     uint32_t cpu;
     const string NAME;
     const uint32_t NUM_SET, NUM_WAY, NUM_LINE, WQ_SIZE, RQ_SIZE, PQ_SIZE, MSHR_SIZE;
@@ -131,6 +136,14 @@ class CACHE : public MEMORY {
     std::map<uint8_t, uint64_t> ipc_tag_access;  // Total accesses per ipc_tag
     std::map<uint8_t, uint64_t> ipc_tag_hit;     // Total hits per ipc_tag
     std::map<uint8_t, uint64_t> ipc_tag_miss;    // Total misses per ipc_tag
+    std::unordered_set<uint64_t> llc_ever_seen;  // Persistent LLC line history across warmup and ROI
+    std::deque<uint64_t> llc_ghost_queue;        // FIFO of recently evicted LLC lines
+    std::unordered_map<uint64_t, uint32_t> llc_ghost_map; // Membership/count map for ghost queue
+    uint64_t llc_first_touch_miss[2][2];         // [ipc_bucket][0=LOAD,1=RFO]
+    uint64_t llc_reload_miss[2][2];              // [ipc_bucket][0=LOAD,1=RFO]
+    uint64_t llc_ghost_hit[2][2];                // [ipc_bucket][0=LOAD,1=RFO]
+    uint64_t llc_ipc_evictions[2];               // [ipc_bucket]
+    uint64_t llc_ipc_dirty_evictions[2];         // [ipc_bucket]
     
     // constructor
     CACHE(string v1, uint32_t v2, int v3, uint32_t v4, uint32_t v5, uint32_t v6, uint32_t v7, uint32_t v8) 
@@ -168,6 +181,18 @@ class CACHE : public MEMORY {
         ipc_tag_access.clear();
         ipc_tag_hit.clear();
         ipc_tag_miss.clear();
+        llc_ever_seen.clear();
+        llc_ghost_queue.clear();
+        llc_ghost_map.clear();
+        for (uint32_t ipc_idx = 0; ipc_idx < 2; ipc_idx++) {
+            for (uint32_t type_idx = 0; type_idx < 2; type_idx++) {
+                llc_first_touch_miss[ipc_idx][type_idx] = 0;
+                llc_reload_miss[ipc_idx][type_idx] = 0;
+                llc_ghost_hit[ipc_idx][type_idx] = 0;
+            }
+            llc_ipc_evictions[ipc_idx] = 0;
+            llc_ipc_dirty_evictions[ipc_idx] = 0;
+        }
 
         lower_level = NULL;
         extra_interface = NULL;
@@ -223,13 +248,21 @@ class CACHE : public MEMORY {
          handle_prefetch();
 
     void add_mshr(PACKET *packet),
+         llc_track_reuse_miss(uint32_t req_type, uint8_t ipc_tag, uint64_t line_addr, bool in_warmup),
+         llc_check_ghost_hit(uint32_t req_type, uint8_t ipc_tag, uint64_t line_addr, bool in_warmup),
+         llc_insert_ghost_eviction(uint64_t line_addr),
+         llc_track_ipc_eviction(uint8_t ipc_tag, bool is_dirty),
+         reset_llc_reuse_counters(),
          update_fill_cycle(),
+         l2c_initialize_replacement(),
          llc_initialize_replacement(),
          update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
+         l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
          llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
          lru_update(uint32_t set, uint32_t way),
          fill_cache(uint32_t set, uint32_t way, PACKET *packet),
          replacement_final_stats(),
+         l2c_replacement_final_stats(),
          llc_replacement_final_stats(),
          //prefetcher_initialize(),
          l1d_prefetcher_initialize(),
@@ -254,6 +287,7 @@ class CACHE : public MEMORY {
     uint32_t get_set(uint64_t address),
              get_way(uint64_t address, uint32_t set),
              find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type),
+             l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type),
              llc_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type),
              lru_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type);
 };

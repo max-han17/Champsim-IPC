@@ -26,6 +26,7 @@ libs := $(addprefix -l,$(libs))
 libDir := $(addprefix -L,$(libDir))
 CFlags += -c $(debug) $(inc) $(libDir) $(libs)
 sources := $(shell find $(srcDir) -name '*.$(srcExt)')
+sources := $(filter-out replacement/base_replacement_%.cc,$(sources))
 srcDirs := $(shell find . -name '*.$(srcExt)' -exec dirname {} \; | uniq)
 objects := $(patsubst %.$(srcExt),$(objDir)/%.o,$(sources))
 

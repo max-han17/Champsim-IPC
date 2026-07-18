@@ -5,11 +5,11 @@
 #define maxRRPV 3
 #define SHCT_SIZE  16384
 #define SHCT_PRIME 16381
-#define SAMPLER_SET (256*NUM_CPUS)
-#define SAMPLER_WAY LLC_WAY
+#define SAMPLER_SET 256
+#define SAMPLER_WAY L2C_WAY
 #define SHCT_MAX 7
 
-static uint32_t rrpv[LLC_SET][LLC_WAY];
+static uint32_t rrpv[NUM_CPUS][L2C_SET][L2C_WAY];
 
 // sampler structure
 class SAMPLER_class
@@ -20,7 +20,7 @@ class SAMPLER_class
             used;
 
     uint64_t tag, cl_addr, ip;
-    
+
     uint32_t lru;
 
     SAMPLER_class() {
@@ -37,8 +37,8 @@ class SAMPLER_class
 };
 
 // sampler
-static uint32_t rand_sets[SAMPLER_SET];
-static SAMPLER_class sampler[SAMPLER_SET][SAMPLER_WAY];
+static uint32_t rand_sets[NUM_CPUS][SAMPLER_SET];
+static SAMPLER_class sampler[NUM_CPUS][SAMPLER_SET][SAMPLER_WAY];
 
 // prediction table structure
 class SHCT_class {
@@ -52,55 +52,56 @@ class SHCT_class {
 static SHCT_class SHCT[NUM_CPUS][SHCT_SIZE];
 
 // initialize replacement state
-void CACHE::llc_initialize_replacement()
+void CACHE::l2c_initialize_replacement()
 {
-    cout << "Initialize SHIP state" << endl;
+    if (cache_type != IS_L2C)
+        return;
 
-    for (int i=0; i<LLC_SET; i++) {
-        for (int j=0; j<LLC_WAY; j++) {
-            rrpv[i][j] = maxRRPV;
+    if (cpu == 0)
+        cout << "Initialize SHIP-L2C state" << endl;
+
+    for (int i=0; i<L2C_SET; i++) {
+        for (int j=0; j<L2C_WAY; j++) {
+            rrpv[cpu][i][j] = maxRRPV;
         }
     }
 
     // initialize sampler
     for (int i=0; i<SAMPLER_SET; i++) {
         for (int j=0; j<SAMPLER_WAY; j++) {
-            sampler[i][j].lru = j;
+            sampler[cpu][i][j].lru = j;
         }
     }
 
     // randomly selected sampler sets
     srand(time(NULL));
-    unsigned long rand_seed = 1;
+    unsigned long rand_seed = cpu + 1;
     unsigned long max_rand = 1048576;
-    uint32_t my_set = LLC_SET;
     int do_again = 0;
     for (int i=0; i<SAMPLER_SET; i++)
     {
-        do 
+        do
         {
             do_again = 0;
             rand_seed = rand_seed * 1103515245 + 12345;
-            rand_sets[i] = ((unsigned) ((rand_seed/65536) % max_rand)) % my_set;
-            // printf("Assign rand_sets[%d]: %u  LLC: %u\n", i, rand_sets[i], my_set);
-            for (int j=0; j<i; j++) 
+            rand_sets[cpu][i] = ((unsigned) ((rand_seed/65536) % max_rand)) % L2C_SET;
+            for (int j=0; j<i; j++)
             {
-                if (rand_sets[i] == rand_sets[j]) 
+                if (rand_sets[cpu][i] == rand_sets[cpu][j])
                 {
                     do_again = 1;
                     break;
                 }
             }
         } while (do_again);
-        // printf("rand_sets[%d]: %d\n", i, rand_sets[i]);
     }
 }
 
 // check if this set is sampled
-static uint32_t is_it_sampled(uint32_t set)
+static uint32_t is_it_sampled(uint32_t cpu, uint32_t set)
 {
     for (int i=0; i<SAMPLER_SET; i++)
-        if (rand_sets[i] == set)
+        if (rand_sets[cpu][i] == set)
             return i;
 
     return SAMPLER_SET;
@@ -109,8 +110,8 @@ static uint32_t is_it_sampled(uint32_t set)
 // update sampler
 static void update_sampler(uint32_t cpu, uint32_t s_idx, uint64_t address, uint64_t ip, uint8_t type)
 {
-    SAMPLER_class *s_set = sampler[s_idx];
-    uint64_t tag = address / (64*LLC_SET); 
+    SAMPLER_class *s_set = sampler[cpu][s_idx];
+    uint64_t tag = address / (64*L2C_SET);
     int match = -1;
 
     // check hit
@@ -122,17 +123,8 @@ static void update_sampler(uint32_t cpu, uint32_t s_idx, uint64_t address, uint6
             if (SHCT[cpu][SHCT_idx].counter > 0)
                 SHCT[cpu][SHCT_idx].counter--;
 
-            /*
-            if (draw_transition)
-                printf("cycle: %lu SHCT: %d ip: 0x%llX SAMPLER_HIT cl_addr: 0x%llX page: 0x%llX block: %ld set: %d\n", 
-                ooo_cpu[cpu].current_cycle, SHCT[cpu][SHCT_idx].dead, s_set[match].ip, address>>6, address>>12, (address>>6) & 0x3F, s_idx);
-            */
-
-            //s_set[match].ip = ip; // SHIP does not update ip on sampler hit
-            s_set[match].type = type; 
+            s_set[match].type = type;
             s_set[match].used = 1;
-            //D(printf("sampler hit  cpu: %d  set: %d  way: %d  tag: %x  ip: %lx  type: %d  lru: %d\n",
-            //            cpu, rand_sets[s_idx], match, tag, ip, type, s_set[match].lru));
 
             break;
         }
@@ -150,9 +142,6 @@ static void update_sampler(uint32_t cpu, uint32_t s_idx, uint64_t address, uint6
                 s_set[match].ip = ip;
                 s_set[match].type = type;
                 s_set[match].used = 0;
-
-                //D(printf("sampler invalid  cpu: %d  set: %d  way: %d  tag: %x  ip: %lx  type: %d  lru: %d\n",
-                //            cpu, rand_sets[s_idx], match, tag, ip, type, s_set[match].lru));
                 break;
             }
         }
@@ -170,21 +159,12 @@ static void update_sampler(uint32_t cpu, uint32_t s_idx, uint64_t address, uint6
                     uint32_t SHCT_idx = s_set[match].ip % SHCT_PRIME;
                     if (SHCT[cpu][SHCT_idx].counter < SHCT_MAX)
                         SHCT[cpu][SHCT_idx].counter++;
-
-                    /*
-                    if (draw_transition)
-                        printf("cycle: %lu SHCT: %d ip: 0x%llX SAMPLER_MISS cl_addr: 0x%llX page: 0x%llX block: %ld set: %d\n", 
-                        ooo_cpu[cpu].current_cycle, SHCT[cpu][SHCT_idx].dead, s_set[match].ip, address>>6, address>>12, (address>>6) & 0x3F, s_idx);
-                    */
                 }
 
                 s_set[match].tag = tag;
                 s_set[match].ip = ip;
                 s_set[match].type = type;
                 s_set[match].used = 0;
-
-                //D(printf("sampler miss  cpu: %d  set: %d  way: %d  tag: %x  ip: %lx  type: %d  lru: %d\n",
-                //            cpu, rand_sets[s_idx], match, tag, ip, type, s_set[match].lru));
                 break;
             }
         }
@@ -201,17 +181,24 @@ static void update_sampler(uint32_t cpu, uint32_t s_idx, uint64_t address, uint6
 }
 
 // find replacement victim
-uint32_t CACHE::llc_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
+    // fill invalid line first
+    for (uint32_t way=0; way<L2C_WAY; way++) {
+        if (block[set][way].valid == false)
+            return way;
+    }
+
     // look for the maxRRPV line
     while (1)
     {
-        for (int i=0; i<LLC_WAY; i++)
-            if (rrpv[set][i] == maxRRPV)
+        for (int i=0; i<L2C_WAY; i++)
+            if (rrpv[cpu][set][i] == maxRRPV)
                 return i;
 
-        for (int i=0; i<LLC_WAY; i++)
-            rrpv[set][i]++;
+        for (int i=0; i<L2C_WAY; i++)
+            if (rrpv[cpu][set][i] < maxRRPV)
+                rrpv[cpu][set][i]++;
     }
 
     // WE SHOULD NOT REACH HERE
@@ -220,48 +207,24 @@ uint32_t CACHE::llc_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, c
 }
 
 // called on every cache hit and cache fill
-void CACHE::llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
 {
-    string TYPE_NAME;
-    if (type == LOAD)
-        TYPE_NAME = "LOAD";
-    else if (type == RFO)
-        TYPE_NAME = "RFO";
-    else if (type == PREFETCH)
-        TYPE_NAME = "PF";
-    else if (type == WRITEBACK)
-        TYPE_NAME = "WB";
-    else
-        assert(0);
-
-    if (hit)
-        TYPE_NAME += "_HIT";
-    else
-        TYPE_NAME += "_MISS";
-
-    if ((type == WRITEBACK) && ip)
-        assert(0);
-
-    //cout << "CPU: " << cpu << "  LLC " << setw(9) << TYPE_NAME << " set: " << setw(5) << set << " way: " << setw(2) << way;
-    //cout << hex << " paddr: " << setw(12) << full_addr << " ip: " << setw(8) << ip << " victim_addr: " << victim_addr << dec << endl;
-    
-    // handle writeback access
     if (type == WRITEBACK) {
         if (hit)
             return;
         else {
-            rrpv[set][way] = maxRRPV-1;
+            rrpv[cpu][set][way] = maxRRPV-1;
             return;
         }
     }
 
     // update sampler
-    uint32_t s_idx = is_it_sampled(set);
+    uint32_t s_idx = is_it_sampled(cpu, set);
     if (s_idx < SAMPLER_SET)
         update_sampler(cpu, s_idx, full_addr, ip, type);
 
     if (hit)
-        rrpv[set][way] = 0;
+        rrpv[cpu][set][way] = 0;
     else {
         // SHIP prediction
         uint32_t SHCT_idx = ip % SHCT_PRIME;
@@ -270,14 +233,14 @@ void CACHE::llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
         if (SHCT_idx >= SHCT_PRIME)
             assert(0);
 
-        rrpv[set][way] = maxRRPV-1;
+        rrpv[cpu][set][way] = maxRRPV-1;
         if (SHCT[cpu][SHCT_idx].counter == SHCT_MAX)
-            rrpv[set][way] = maxRRPV;
+            rrpv[cpu][set][way] = maxRRPV;
     }
 }
 
 // use this function to print out your own stats at the end of simulation
-void CACHE::llc_replacement_final_stats()
+void CACHE::l2c_replacement_final_stats()
 {
 
 }

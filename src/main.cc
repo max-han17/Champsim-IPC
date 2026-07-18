@@ -135,8 +135,31 @@ void print_ipc_tag_stats(uint32_t cpu, CACHE *cache)
              << "_hit " << hit << endl;
         cout << "Core_" << cpu << "_" << cache->NAME << "_ipc_tag_" << (int)tag 
              << "_miss " << miss << endl;
-        cout << "######################## TESTING" << endl;
     }
+}
+
+void print_llc_reuse_stats(CACHE *cache)
+{
+    if (cache->cache_type != IS_LLC)
+        return;
+
+    cout << "LLC_ipc0_first_touch_LOAD " << cache->llc_first_touch_miss[0][0] << endl
+         << "LLC_ipc1_first_touch_LOAD " << cache->llc_first_touch_miss[1][0] << endl
+         << "LLC_ipc0_reload_LOAD " << cache->llc_reload_miss[0][0] << endl
+         << "LLC_ipc1_reload_LOAD " << cache->llc_reload_miss[1][0] << endl
+         << "LLC_ipc0_first_touch_RFO " << cache->llc_first_touch_miss[0][1] << endl
+         << "LLC_ipc1_first_touch_RFO " << cache->llc_first_touch_miss[1][1] << endl
+         << "LLC_ipc0_reload_RFO " << cache->llc_reload_miss[0][1] << endl
+         << "LLC_ipc1_reload_RFO " << cache->llc_reload_miss[1][1] << endl
+         << "LLC_ipc0_ghost_hit_LOAD " << cache->llc_ghost_hit[0][0] << endl
+         << "LLC_ipc1_ghost_hit_LOAD " << cache->llc_ghost_hit[1][0] << endl
+         << "LLC_ipc0_ghost_hit_RFO " << cache->llc_ghost_hit[0][1] << endl
+         << "LLC_ipc1_ghost_hit_RFO " << cache->llc_ghost_hit[1][1] << endl
+         << "LLC_ipc0_evictions " << cache->llc_ipc_evictions[0] << endl
+         << "LLC_ipc1_evictions " << cache->llc_ipc_evictions[1] << endl
+         << "LLC_ipc0_dirty_evictions " << cache->llc_ipc_dirty_evictions[0] << endl
+         << "LLC_ipc1_dirty_evictions " << cache->llc_ipc_dirty_evictions[1] << endl
+         << endl;
 }
 
 void print_branch_stats(uint32_t cpu)
@@ -201,6 +224,7 @@ void reset_cache_stats(uint32_t cpu, CACHE *cache)
     cache->ipc_tag_access.clear();
     cache->ipc_tag_hit.clear();
     cache->ipc_tag_miss.clear();
+    cache->reset_llc_reuse_counters();
 
     //clear prefetch stats
     cache->pf_requested = 0;
@@ -772,6 +796,7 @@ int main(int argc, char** argv)
         ooo_cpu[i].L2C.upper_level_icache[i] = &ooo_cpu[i].L1I;
         ooo_cpu[i].L2C.upper_level_dcache[i] = &ooo_cpu[i].L1D;
         ooo_cpu[i].L2C.lower_level = &uncore.LLC;
+        ooo_cpu[i].L2C.l2c_initialize_replacement();
         ooo_cpu[i].L2C.l2c_prefetcher_initialize();
 
         // SHARED CACHE
@@ -980,10 +1005,12 @@ int main(int argc, char** argv)
             << "Core_" << i << "_minor_page_fault " << minor_fault[i] << endl
             << endl;
     }
+    print_llc_reuse_stats(&uncore.LLC);
 
     for (uint32_t i=0; i<NUM_CPUS; i++) {
         ooo_cpu[i].L1D.l1d_prefetcher_final_stats();
         ooo_cpu[i].L2C.l2c_prefetcher_final_stats();
+        ooo_cpu[i].L2C.l2c_replacement_final_stats();
     }
 
     uncore.LLC.llc_prefetcher_final_stats();
