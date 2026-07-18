@@ -75,6 +75,7 @@ cd tracer
 
 ### 1) Generate traces from MPI application
 
+Some simple example applications can be found under ```mpsc_queue/```. 
 Run the launcher with exactly 2 ranks (ensure there is sufficient disk space as uncompressed long traces can be tens of gigabytes):
 
 ```bash
