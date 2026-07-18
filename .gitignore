@@ -4,3 +4,4 @@ outputs/
 obj/
 .vscode/
 mpsc_queue/build/
+tracer/obj-intel64/
